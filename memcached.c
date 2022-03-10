@@ -62,6 +62,8 @@
 #include <sys/sysctl.h>
 #endif
 
+#include "mcrdma.h"
+
 /*
  * forward declarations
  */
@@ -221,6 +223,7 @@ static void settings_init(void) {
     settings.access = 0700;
     settings.port = 11211;
     settings.udpport = 0;
+    settings.use_rdma = false;
 #ifdef TLS
     settings.ssl_enabled = false;
     settings.ssl_ctx = NULL;
@@ -496,6 +499,9 @@ static const char *prot_text(enum protocol prot) {
             break;
         case binary_prot:
             rv = "binary";
+            break;
+        case rdma_prot:
+            rv = "rdma";
             break;
         case negotiating_prot:
             rv = "auto-negotiate";
@@ -798,6 +804,9 @@ conn *conn_new(const int sfd, enum conn_states init_state,
                 // binprot handles its own authentication via SASL parsing.
                 c->authenticated = false;
                 c->try_read_command = try_read_command_binary;
+                break;
+            case rdma_prot:
+                c->authenticated = true;
                 break;
             case negotiating_prot:
                 c->try_read_command = try_read_command_negotiate;
@@ -3630,14 +3639,17 @@ static int server_socket(const char *interface,
 static int server_sockets(int port, enum network_transport transport,
                           FILE *portnumber_file) {
     bool ssl_enabled = false;
-
 #ifdef TLS
     const char *notls = "notls";
     ssl_enabled = settings.ssl_enabled;
 #endif
 
     if (settings.inter == NULL) {
-        return server_socket(settings.inter, port, transport, portnumber_file, ssl_enabled);
+        if(IS_RDMA(transport)) {
+            return mcrdma_init(settings.inter, port);
+        } else {
+            return server_socket(settings.inter, port, transport, portnumber_file, ssl_enabled);
+        }
     } else {
         // tokenize them and bind to each one of them..
         char *b;
@@ -3706,7 +3718,11 @@ static int server_sockets(int port, enum network_transport transport,
             if (strcmp(p, "*") == 0) {
                 p = NULL;
             }
-            ret |= server_socket(p, the_port, transport, portnumber_file, ssl_enabled);
+            if(IS_RDMA(transport)) {
+                ret |= mcrdma_init(p, the_port);
+            } else {
+                ret |= server_socket(p, the_port, transport, portnumber_file, ssl_enabled);
+            }
             if (ret != 0 && errno_save == 0) errno_save = errno;
         }
         free(list);
@@ -4079,6 +4095,7 @@ static void usage(void) {
     verify_default("ssl_min_version", settings.ssl_min_version == TLS1_2_VERSION);
 #endif
     printf("-N, --napi_ids            number of napi ids. see doc/napi_ids.txt for more details\n");
+    printf("-g, --rdma                use RDMA for networking\n");
     return;
 }
 
@@ -4873,6 +4890,7 @@ int main (int argc, char **argv) {
           "e:"  /* mmap path for external item memory */
           "o:"  /* Extended generic options */
           "N:"  /* NAPI ID based thread selection */
+          "g"   /* Use RDMA for networking */
           ;
 
     /* process arguments */
@@ -4914,6 +4932,7 @@ int main (int argc, char **argv) {
         {"memory-file", required_argument, 0, 'e'},
         {"extended", required_argument, 0, 'o'},
         {"napi-ids", required_argument, 0, 'N'},
+        {"rdma", no_argument, 0, 'g'},
         {0, 0, 0, 0}
     };
     int optindex;
@@ -5141,6 +5160,9 @@ int main (int argc, char **argv) {
                 fprintf(stderr, "Maximum number of NAPI IDs must be greater than 0\n");
                 return 1;
             }
+            break;
+        case 'g':   // RDMA opt
+            settings.use_rdma = true;
             break;
         case 'o': /* It's sub-opts time! */
             subopts_orig = subopts = strdup(optarg); /* getsubopt() changes the original args */
@@ -5723,6 +5745,11 @@ int main (int argc, char **argv) {
         settings.port = settings.udpport;
     }
 
+    if(settings.use_rdma && udp_specified) {
+        fprintf(stderr, "ERROR: Cannot enable UDP while using RDMA.\n");
+        exit(EX_USAGE);
+    }
+
 
 #ifdef TLS
     /*
@@ -6070,34 +6097,50 @@ int main (int argc, char **argv) {
             }
         }
 
-        errno = 0;
-        if (settings.port && server_sockets(settings.port, tcp_transport,
-                                           portnumber_file)) {
-            if (settings.inter == NULL) {
-                vperror("failed to listen on TCP port %d", settings.port);
-            } else {
-                vperror("failed to listen on one of interface(s) %s", settings.inter);
+        // Right now you can either use RDMA or TCP/UDP, but not both at the same time
+        // function server_sockets is still called to preserve multiple interfaces parsing logic
+        if(settings.use_rdma) {
+            // RDMA server creation
+            if(settings.port &&
+                    server_sockets(settings.port, rdma_transport, portnumber_file) ) {
+                if (settings.inter == NULL) {
+                    vperror("failed to start RDMA server on port %d", settings.port);
+                } else {
+                    vperror("failed to start RDMA server on one of interface(s) %s", settings.inter);
+                }
+                exit(EX_OSERR);
             }
-            exit(EX_OSERR);
-        }
-
-        /*
-         * initialization order: first create the listening sockets
-         * (may need root on low ports), then drop root if needed,
-         * then daemonize if needed, then init libevent (in some cases
-         * descriptors created by libevent wouldn't survive forking).
-         */
-
-        /* create the UDP listening socket and bind it */
-        errno = 0;
-        if (settings.udpport && server_sockets(settings.udpport, udp_transport,
-                                              portnumber_file)) {
-            if (settings.inter == NULL) {
-                vperror("failed to listen on UDP port %d", settings.udpport);
-            } else {
-                vperror("failed to listen on one of interface(s) %s", settings.inter);
+        } else {
+            // TCP and UDP socket creation
+            errno = 0;
+            if (settings.port && server_sockets(settings.port, tcp_transport,
+                                            portnumber_file)) {
+                if (settings.inter == NULL) {
+                    vperror("failed to listen on TCP port %d", settings.port);
+                } else {
+                    vperror("failed to listen on one of interface(s) %s", settings.inter);
+                }
+                exit(EX_OSERR);
             }
-            exit(EX_OSERR);
+
+            /*
+            * initialization order: first create the listening sockets
+            * (may need root on low ports), then drop root if needed,
+            * then daemonize if needed, then init libevent (in some cases
+            * descriptors created by libevent wouldn't survive forking).
+            */
+
+            /* create the UDP listening socket and bind it */
+            errno = 0;
+            if (settings.udpport && server_sockets(settings.udpport, udp_transport,
+                                                portnumber_file)) {
+                if (settings.inter == NULL) {
+                    vperror("failed to listen on UDP port %d", settings.udpport);
+                } else {
+                    vperror("failed to listen on one of interface(s) %s", settings.inter);
+                }
+                exit(EX_OSERR);
+            }
         }
 
         if (portnumber_file) {
@@ -6129,11 +6172,24 @@ int main (int argc, char **argv) {
     /* Initialize the uriencode lookup table. */
     uriencode_init();
 
-    /* enter the event loop */
-    while (!stop_main_loop) {
-        if (event_base_loop(main_base, EVLOOP_ONCE) != 0) {
-            retval = EXIT_FAILURE;
-            break;
+    if(settings.use_rdma) {
+        fprintf(stderr, "listening for RDMA connections\n");
+
+        /* RDMA connection management */
+        while(!stop_main_loop) {
+            if(mcrdma_listen() < 0) {
+                retval = EXIT_FAILURE;
+                break;
+            }
+        }
+
+    } else {
+        /* enter the event loop for TCP/UDP */
+        while (!stop_main_loop) {
+            if (event_base_loop(main_base, EVLOOP_ONCE) != 0) {
+                retval = EXIT_FAILURE;
+                break;
+            }
         }
     }
 

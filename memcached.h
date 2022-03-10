@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <grp.h>
 #include <signal.h>
+#include <stdbool.h>
 /* need this to get IOV_MAX on some platforms. */
 #ifndef __need_IOV_MAX
 #define __need_IOV_MAX
@@ -223,6 +224,7 @@ enum bin_substates {
 enum protocol {
     ascii_prot = 3, /* arbitrary value. */
     binary_prot,
+    rdma_prot,
     negotiating_prot, /* Discovering the protocol */
 #ifdef PROXY
     proxy_prot,
@@ -232,7 +234,8 @@ enum protocol {
 enum network_transport {
     local_transport, /* Unix sockets*/
     tcp_transport,
-    udp_transport
+    udp_transport,
+    rdma_transport // exists for consistency
 };
 
 enum pause_thread_types {
@@ -257,6 +260,7 @@ enum close_reasons {
 
 #define IS_TCP(x) (x == tcp_transport)
 #define IS_UDP(x) (x == udp_transport)
+#define IS_RDMA(x) (x == rdma_transport) // exists for consistency
 
 #define NREAD_ADD 1
 #define NREAD_SET 2
@@ -429,6 +433,7 @@ struct settings {
     int maxconns;
     int port;
     int udpport;
+    bool use_rdma;
     char *inter;
     int verbose;
     rel_time_t oldest_live; /* ignore existing items older than this */
