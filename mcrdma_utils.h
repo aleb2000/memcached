@@ -16,7 +16,13 @@
 #include <rdma/rdma_cma.h>
 #include <infiniband/verbs.h>
 
-#define MCRDMA_ERROR(...) fprintf(stderr, __VA_ARGS__);
+#define mcrdma_log(...) fprintf(stderr, __VA_ARGS__);
+
+#define mcrdma_error(...) do {                                  \
+        fprintf(stderr, "MCRDMA ERROR: %s:%d | ", __FILE__, __LINE__);         \
+        fprintf(stderr, __VA_ARGS__);                           \
+        fprintf(stderr, " | errno: %s (%d)\n", strerror(errno), errno); \
+    } while(0);
 
 /* 
  * Processes an RDMA connection management (CM) event.

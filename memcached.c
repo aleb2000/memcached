@@ -6003,10 +6003,12 @@ int main (int argc, char **argv) {
 #endif
 #ifdef EXTSTORE
     slabs_set_storage(storage);
-    memcached_thread_init(settings.num_threads, storage);
+    if(!settings.use_rdma) // Disabled thread subsystem when using rdma
+        memcached_thread_init(settings.num_threads, storage);
     init_lru_crawler(storage);
 #else
-    memcached_thread_init(settings.num_threads, NULL);
+    if(!settings.use_rdma)
+        memcached_thread_init(settings.num_threads, NULL);
     init_lru_crawler(NULL);
 #endif
 

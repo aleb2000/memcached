@@ -5,6 +5,9 @@
  * structures and function prototypes.
  */
 
+#ifndef MEMCACHED_H
+#define MEMCACHED_H
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -861,6 +864,9 @@ struct conn {
     ssize_t (*read)(conn  *c, void *buf, size_t count);
     ssize_t (*sendmsg)(conn *c, struct msghdr *msg, int flags);
     ssize_t (*write)(conn *c, void *buf, size_t count);
+
+    // Rdma stuff
+    struct mcrdma_state *rdma;
 };
 
 /* array of conn structures, indexed by file descriptor */
@@ -1046,3 +1052,5 @@ extern void drop_worker_privileges(void);
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
+
+#endif // MEMCACHED_H

@@ -44,3 +44,4 @@ doc/protocol-binary.txt
 /memcached.spec
 .*.swp
 /compile_commands.json
+mcrdma_client/mcrdma_client
