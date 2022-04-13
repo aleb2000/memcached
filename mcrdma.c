@@ -1,5 +1,6 @@
 #include "mcrdma.h"
 #include <rdma/rdma_cma.h>
+#include <rdma/rdma_verbs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <netinet/in.h>
@@ -20,8 +21,7 @@ int mcrdma_init(const char *interface, int port) {
         exit(EXIT_FAILURE);
     }
 
-    struct sockaddr_in sockaddr;
-    bzero(&sockaddr, sizeof(struct sockaddr_in));
+    struct sockaddr_in sockaddr = {0};
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_port = htons(port);
 
@@ -58,7 +58,6 @@ int mcrdma_init(const char *interface, int port) {
     
     mcrdma_log("rdma server will listen for connections on %s:%d\n", inet_ntoa(sockaddr.sin_addr), port);
 
-    
     return 0;
 }
 
@@ -100,23 +99,35 @@ int mcrdma_listen() {
 
 // Prepare a connection state and resources prior to accepting an incoming client
 static int prepare_connection(struct mcrdma_state *s) {
+    s->buf = malloc(MCRDMA_BUF_SIZE);
+    s->buf_size = MCRDMA_BUF_SIZE;
+    if(!s->buf) {
+        mcrdma_error("Failed to allocate rdma receive buffer");
+        return -1;
+    }
+
+    // Create a Protection Domain
     s->pd = ibv_alloc_pd(s->id->verbs);
 	if (!s->pd) {
 		mcrdma_error("Failed to allocate PD");
 		return -1;
 	}
 
+    // Register Memory Region
+    s->buf_mr = ibv_reg_mr(s->pd, s->buf, s->buf_size, MCRDMA_BUF_ACCESS_FLAGS);
+    if(!s->buf_mr) {
+        mcrdma_error("Failed to register buffer memory region");
+        return -1;
+    }
+
+    // Create Completion Queue
 	s->comp_channel = ibv_create_comp_channel(s->id->verbs);
 	if (!s->comp_channel) {
 		mcrdma_error("Failed to create IO completion event channel");
 	    return -1;
 	}
 
-    s->client_cq = ibv_create_cq(s->id->verbs, 
-			16, 
-			NULL /* user context, not used here */,
-			s->comp_channel, 
-			0 /* signaling vector, not used here*/);
+    s->client_cq = ibv_create_cq(s->id->verbs, 16, NULL, s->comp_channel, 0);
 	if (!s->client_cq) {
 		mcrdma_error("Failed to create CQ");
 		return -1;
@@ -127,6 +138,7 @@ static int prepare_connection(struct mcrdma_state *s) {
 		return -1;
 	}
 
+    // Create Queue Pair
     struct ibv_qp_init_attr qp_init_attr = {0};
     qp_init_attr.cap.max_recv_sge = 8;
     qp_init_attr.cap.max_send_sge = 8;
@@ -142,6 +154,7 @@ static int prepare_connection(struct mcrdma_state *s) {
 	    return -1;
 	}
 
+    // Create new Event Channel and migrate
     struct rdma_event_channel *echannel = rdma_create_event_channel();
     if(!echannel) {
         mcrdma_error("Failed to create new event channel to migrate to");
@@ -158,6 +171,10 @@ static int prepare_connection(struct mcrdma_state *s) {
     return 0;
 }
 
+static void resources_destroy(struct mcrdma_state* s) {
+    // TODO: cleanup
+}
+
 void *mcrdma_worker(void* arg) {
     mcrdma_log("Started worker thread.\n");
     conn *c = (conn*) arg;
@@ -168,8 +185,7 @@ void *mcrdma_worker(void* arg) {
         return (void*) -1;
     }
 
-    struct rdma_conn_param conn_param;
-	bzero(&conn_param, sizeof(conn_param));
+    struct rdma_conn_param conn_param = {0};
 	conn_param.initiator_depth = 1;
 	conn_param.responder_resources = 1;
 
@@ -189,6 +205,22 @@ void *mcrdma_worker(void* arg) {
 
     mcrdma_log("Connection established!\n");
 
+    struct ibv_wc wc = {0};
+
+    while(1) {
+
+    if(rdma_post_recv(s->id, NULL, s->buf, s->buf_size, s->buf_mr)) {
+        mcrdma_error("Failed to post recv");
+        return (void*) -1;
+    }
+    
+    int num_wc = process_work_completion_events(s->comp_channel, &wc, 1);
+
+    mcrdma_log("Received %d WCs\n", num_wc);
+
+    mcrdma_log("buf content: %s\n", s->buf);
+
+    }
 
     mcrdma_conn_destroy(c);
     return NULL;
@@ -239,12 +271,13 @@ void mcrdma_conn_destroy(conn* c) {
         MEMCACHED_CONN_DESTROY(c);
         //if (c->rbuf)
         //    free(c->rbuf);
-        if(c->rdma) 
+        if(c->rdma) {
+            resources_destroy(c->rdma);
             free(c->rdma);
+        }
 
         free(c);
     }
-
 }
 
 void mcrdma_destroy() {

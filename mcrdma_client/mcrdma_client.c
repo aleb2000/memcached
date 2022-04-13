@@ -1,5 +1,6 @@
 #include "mcrdma_client.h"
 #include <rdma/rdma_cma.h>
+#include <rdma/rdma_verbs.h>
 #include "../mcrdma_utils.h"
 
 int mcrdma_client_init(struct mcrdma_client *client) {
@@ -52,11 +53,25 @@ int mcrdma_client_init(struct mcrdma_client *client) {
 }
 
 int mcrdma_client_alloc_resources(struct mcrdma_client* client) {
+    client->buf = malloc(MCRDMA_BUF_SIZE);
+    client->buf_size = MCRDMA_BUF_SIZE;
+    if(!client->buf) {
+        mcrdma_error("Failed to allocate rdma receive buffer");
+        return -1;
+    }
+
     client->pd = ibv_alloc_pd(client->id->verbs);
 	if (!client->pd) {
 		mcrdma_error("Failed to alloc pd");
 		return -1;
 	}
+
+    // Register Memory Region
+    client->buf_mr = ibv_reg_mr(client->pd, client->buf, client->buf_size, MCRDMA_BUF_ACCESS_FLAGS);
+    if(!client->buf_mr) {
+        mcrdma_error("Failed to register buffer memory region");
+        return -1;
+    }
 
 	client->comp_channel = ibv_create_comp_channel(client->id->verbs);
 	if (!client->comp_channel) {
@@ -126,5 +141,33 @@ int mcrdma_client_connect(struct mcrdma_client* client) {
         return -1;
     }
 
+    return 0;
+}
+
+int mcrdma_client_ascii_send(struct mcrdma_client* client, char* buf, size_t buf_size) {
+    if(buf_size > client->buf_size || buf_size == 0) {
+        mcrdma_log("Invalid data buffer size\n");
+        return -1;
+    }
+
+    // Copy data buffer and zero out the rest of it
+    memcpy(client->buf, buf, buf_size);
+    bzero(client->buf + buf_size, client->buf_size - buf_size);
+
+    // This send could be made unsignaled
+    if(rdma_post_send(client->id, NULL, client->buf, client->buf_size, client->buf_mr, IBV_SEND_SIGNALED)) {
+        mcrdma_error("Failed posting send");
+        return -1;
+    }
+
+    struct ibv_wc wc = {0};
+
+    int num_wc = process_work_completion_events(client->comp_channel, &wc, 1);
+    if(num_wc < 0) {
+        mcrdma_log("Failed to process work completion events. Returned with value %d\n", num_wc);
+        return -1;
+    }
+
+    mcrdma_log("Recieved %d WCs\n", num_wc);
     return 0;
 }

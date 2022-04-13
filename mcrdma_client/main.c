@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "mcrdma_client.h"
+#include "../mcrdma_utils.h"
 
 static struct mcrdma_client client;
 
@@ -45,8 +46,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("Connection established\n");
+    printf("Connection established!\n");
 
-    printf("Keep alive...");
-    while(1);
+    char buf[MCRDMA_BUF_SIZE] = {0};
+    do {
+        
+        scanf("%s", buf);
+
+        mcrdma_client_ascii_send(&client, buf, MCRDMA_BUF_SIZE);
+
+    } while(1);
 }

@@ -16,8 +16,13 @@ struct mcrdma_state {
     struct ibv_pd *pd;
     struct ibv_comp_channel *comp_channel;
     struct ibv_cq *client_cq;
+
+    char* buf;
+    size_t buf_size;
+    struct ibv_mr* buf_mr;
 };
 
+// Do not remove
 typedef struct conn conn;
 
 // Return 0 on success, 1 on failure
