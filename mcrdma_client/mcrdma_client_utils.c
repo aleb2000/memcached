@@ -1,5 +1,4 @@
-#include "mcrdma_utils.h"
-#include <sys/poll.h>
+#include "mcrdma_client_utils.h"
 
 // Based on https://github.com/animeshtrivedi/rdma-example/blob/master/src/rdma_common.c
 int mcrdma_process_event(struct rdma_event_channel *echannel, 
@@ -7,19 +6,7 @@ int mcrdma_process_event(struct rdma_event_channel *echannel,
 		struct rdma_cm_event **cm_event)
 {
 	int ret = 1;
-	struct pollfd pfds[1];
-	pfds[0].fd = echannel->fd;
-	pfds[0].events = POLLIN;
-	int pret = poll(pfds, 1, -1);
-
-	if(pret == -1) {
-		perror("poll");
-		exit(1);
-	}
-
-	if(pfds[0].revents & POLLIN) {
-		ret = rdma_get_cm_event(echannel, cm_event);
-	}
+	ret = rdma_get_cm_event(echannel, cm_event);
 	
 	if (ret) {
 		if(errno != EAGAIN) { 
@@ -50,48 +37,41 @@ int mcrdma_process_event(struct rdma_event_channel *echannel,
 	return ret;
 }
 
-// Based on https://github.com/animeshtrivedi/rdma-example/blob/master/src/rdma_common.c
-int poll_wce (struct mcrdma_state* s, struct ibv_wc *wc, int max_wc)
+int poll_cq_for_wc (struct ibv_cq* cq, struct ibv_wc *wc, int max_wc)
 {
+	//struct ibv_cq *cq_ptr = NULL;
+	//void *context = NULL;
 	int ret = -1, i, total_wc = 0;
+	/* We wait for the notification on the CQ channel */
+	// ret = ibv_get_cq_event(comp_channel, /* IO channel where we are expecting the notification */ 
+	// 		&cq_ptr, /* which CQ has an activity. This should be the same as CQ we created before */ 
+	// 		&context); /* Associated CQ user context, which we did set */
+	// if (ret) {
+	// 	mcrdma_error("Failed to get next CQ event");
+	// 	return -errno;
+	// }
+	// /* Request for more notifications. */
+	// ret = ibv_req_notify_cq(cq_ptr, 0);
+	// if (ret){
+	// 	mcrdma_error("Failed to request further notifications");
+	// 	return -errno;
+	// }
+	/* We got notification. We reap the work completion (WC) element. It is 
+	 * unlikely but a good practice it write the CQ polling code that 
+	 * can handle zero WCs. ibv_poll_cq can return zero. Same logic as 
+	 * MUTEX conditional variables in pthread programming.
+	 */
 	total_wc = 0;
-	struct pollfd epfds[1];
-	epfds[0].fd = s->echannel->fd;
-	epfds[0].events = POLLIN;
-
-	int c = 0;
 	do {
-		ret = ibv_poll_cq(s->client_cq /* the CQ, we got notification for */, 
+		ret = ibv_poll_cq(cq /* the CQ, we got notification for */, 
 			max_wc - total_wc /* number of remaining WC elements*/,
 			wc + total_wc/* where to store */);
 		if (ret < 0) {
 			mcrdma_error("Failed to poll CQ for WC");
+			/* ret is errno here */
 			return ret;
 		}
 		total_wc += ret;
-		// Don't poll for disconnection at every iteration
-		if(c % 10000 == 0 && ret == 0) {
-			int pret = poll(epfds, 1, 0);
-
-			if(pret == -1) {
-				perror("poll");
-				exit(1);
-			}
-
-			if(epfds[0].revents & POLLIN) {
-				struct rdma_cm_event *cm_event = NULL;
-				if(rdma_get_cm_event(s->echannel, &cm_event)) {
-					mcrdma_error("Failed to get cm event when polling WCEs\n");
-					exit(1);
-				}
-
-				if(cm_event->event == RDMA_CM_EVENT_DISCONNECTED) {
-					rdma_ack_cm_event(cm_event);
-					return -1;
-				}
-			}
-		}
-		c++;
 	} while (total_wc < max_wc); 
 	mcrdma_log("%d WC are completed \n", total_wc);
 	/* Now we check validity and status of I/O work completions */
@@ -103,5 +83,9 @@ int poll_wce (struct mcrdma_state* s, struct ibv_wc *wc, int max_wc)
 			return -(wc[i].status);
 		}
 	}
+	/* Similar to connection management events, we need to acknowledge CQ events */
+	// ibv_ack_cq_events(cq_ptr, 
+	// 		1 /* we received one event notification. This is not 
+	//		number of WC elements */);*/
 	return total_wc; 
 }

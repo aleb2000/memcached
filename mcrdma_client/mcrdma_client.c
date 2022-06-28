@@ -1,7 +1,7 @@
 #include "mcrdma_client.h"
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
-#include "../mcrdma_utils.h"
+#include "mcrdma_client_utils.h"
 
 int mcrdma_client_init(struct mcrdma_client *client) {
     client->echannel = rdma_create_event_channel();
@@ -53,22 +53,37 @@ int mcrdma_client_init(struct mcrdma_client *client) {
 }
 
 int mcrdma_client_alloc_resources(struct mcrdma_client* client) {
-    client->buf = malloc(MCRDMA_BUF_SIZE);
-    client->buf_size = MCRDMA_BUF_SIZE;
-    if(!client->buf) {
-        mcrdma_error("Failed to allocate rdma receive buffer");
-        return -1;
-    }
-
     client->pd = ibv_alloc_pd(client->id->verbs);
 	if (!client->pd) {
 		mcrdma_error("Failed to alloc pd");
 		return -1;
 	}
 
-    // Register Memory Region
-    client->buf_mr = ibv_reg_mr(client->pd, client->buf, client->buf_size, MCRDMA_BUF_ACCESS_FLAGS);
-    if(!client->buf_mr) {
+    // Allocate and register recv buffer
+    client->rbuf = malloc(MCRDMA_BUF_SIZE);
+    if(!client->rbuf) {
+        mcrdma_error("Failed to allocate rdma receive buffer");
+        return -1;
+    }
+    client->rbuf_size = MCRDMA_BUF_SIZE;
+
+    client->rbuf_mr = ibv_reg_mr(client->pd, client->rbuf, client->rbuf_size, MCRDMA_BUF_ACCESS_FLAGS);
+    if(!client->rbuf_mr) {
+        mcrdma_error("Failed to register buffer memory region");
+        return -1;
+    }
+    client->rbuf_posted = false;
+
+    // Allocate and register send buffer
+    client->sbuf = malloc(MCRDMA_BUF_SIZE);
+    if(!client->sbuf) {
+        mcrdma_error("Failed to allocate rdma receive buffer");
+        return -1;
+    }
+    client->sbuf_size = MCRDMA_BUF_SIZE;
+
+    client->sbuf_mr = ibv_reg_mr(client->pd, client->sbuf, client->sbuf_size, MCRDMA_BUF_ACCESS_FLAGS);
+    if(!client->sbuf_mr) {
         mcrdma_error("Failed to register buffer memory region");
         return -1;
     }
@@ -89,10 +104,10 @@ int mcrdma_client_alloc_resources(struct mcrdma_client* client) {
 		return -1;
 	}
 
-	if (ibv_req_notify_cq(client->cq, 0)) {
+	/*if (ibv_req_notify_cq(client->cq, 0)) {
 		mcrdma_error("Failed to request notifications");
 		return -1;
-	}
+	}*/
 
     static struct ibv_qp_init_attr qp_init_attr;
     bzero(&qp_init_attr, sizeof qp_init_attr);
@@ -144,30 +159,94 @@ int mcrdma_client_connect(struct mcrdma_client* client) {
     return 0;
 }
 
-int mcrdma_client_ascii_send(struct mcrdma_client* client, char* buf, size_t buf_size) {
-    if(buf_size > client->buf_size || buf_size == 0) {
-        mcrdma_log("Invalid data buffer size\n");
+int mcrdma_client_disconnect(struct mcrdma_client* client) {
+    if(rdma_disconnect(client->id)) {
+        mcrdma_error("Failed to disconnect from remote host");
+		return -1;
+    }
+
+    struct rdma_cm_event *cm_event;
+
+    if(mcrdma_process_event(client->echannel, 
+			RDMA_CM_EVENT_DISCONNECTED, &cm_event)) {
+        mcrdma_error("Failed to process cm event");
         return -1;
     }
 
-    // Copy data buffer and zero out the rest of it
-    memcpy(client->buf, buf, buf_size);
-    bzero(client->buf + buf_size, client->buf_size - buf_size);
+    if(rdma_ack_cm_event(cm_event)) {
+        mcrdma_error("Failed to ack cm event");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int post_rbuf(struct mcrdma_client* client) {
+    if(!client->rbuf_posted) {
+        if(rdma_post_recv(client->id, NULL, client->rbuf, client->rbuf_size, client->rbuf_mr)) {
+            printf("post recv FAILED\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int mcrdma_client_ascii_send(struct mcrdma_client* client, size_t len) {
+    // Pre-post rbuf
+    if(post_rbuf(client)) {
+        mcrdma_error("Failed to pre-post rbuf");
+        return -1;
+    }
+
+    client->rbuf_posted = true;
 
     // This send could be made unsignaled
-    if(rdma_post_send(client->id, NULL, client->buf, client->buf_size, client->buf_mr, IBV_SEND_SIGNALED)) {
+    if(rdma_post_send(client->id, NULL, client->sbuf, len, client->sbuf_mr, IBV_SEND_SIGNALED)) {
         mcrdma_error("Failed posting send");
         return -1;
     }
 
     struct ibv_wc wc = {0};
 
-    int num_wc = process_work_completion_events(client->comp_channel, &wc, 1);
+    //int num_wc = process_work_completion_events(client->comp_channel, &wc, 1);
+    int num_wc = poll_cq_for_wc(client->cq, &wc, 1);
     if(num_wc < 0) {
         mcrdma_log("Failed to process work completion events. Returned with value %d\n", num_wc);
         return -1;
     }
 
-    mcrdma_log("Recieved %d WCs\n", num_wc);
+    mcrdma_log("Received %d WCs\n", num_wc);
     return 0;
+}
+
+int mcrdma_client_ascii_send_buf(struct mcrdma_client* client, char* buf, size_t buf_size) {
+    if(buf_size > client->sbuf_size || buf_size == 0) {
+        mcrdma_log("Invalid data buffer size\n");
+        return -1;
+    }
+
+    // Copy data buffer
+    memcpy(client->sbuf, buf, buf_size);
+
+    return mcrdma_client_ascii_send(client, buf_size);
+}
+
+int mcrdma_client_ascii_recv(struct mcrdma_client* client) {
+    mcrdma_log("started receive\n");
+    struct ibv_wc wc = {0};
+    if(post_rbuf(client)) {
+        mcrdma_error("Failed to post recv");
+        return -1;
+    }
+    
+    //process_work_completion_events(client->comp_channel, &wc, 1);
+    int num_wc = poll_cq_for_wc(client->cq, &wc, 1);
+    if(num_wc < 0) {
+        mcrdma_log("Failed to process work completion events. Returned with value %d\n", num_wc);
+        return -1;
+    }
+
+
+    client->rbuf_posted = false;
+    return wc.byte_len;
 }

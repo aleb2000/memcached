@@ -1,53 +1,42 @@
-# Memcached
+# Memcached over RDMA
 
-Memcached is a high performance multithreaded event-based key/value cache
-store intended to be used in a distributed system.
+For original Memcached readme open README-MEMCACHED.md
 
-See: https://memcached.org/about
-
-A fun story explaining usage: https://memcached.org/tutorial
-
-If you're having trouble, try the wiki: https://memcached.org/wiki
-
-If you're trying to troubleshoot odd behavior or timeouts, see:
-https://memcached.org/timeouts
-
-https://memcached.org/ is a good resource in general. Please use the mailing
-list to ask questions, github issues aren't seen by everyone!
+This is a fork of Memcached that adds RDMA capabilities. This work was done for a Bachelor Thesis at Vrije Universiteit Amsterdam.
+Based on Memcached 1.6.14
 
 ## Dependencies
-
+Original Memcached deps:
 * libevent - https://www.monkey.org/~provos/libevent/ (libevent-dev)
 * libseccomp (optional, experimental, linux) - enables process restrictions for
   better security. Tested only on x86-64 architectures.
 * openssl (optional) - enables TLS support. need relatively up to date
   version.
 
-## Environment
+RDMA deps:
+* libibverbs
+* librdmacm-devel
 
-Be warned that the -k (mlockall) option to memcached might be
-dangerous when using a large cache. Just make sure the memcached machines
-don't swap.  memcached does non-blocking network I/O, but not disk.  (it
-should never go to disk, or you've lost the whole point of it)
+## Installation
+The installation is the same as when installing Memcached from source, the following command should suffice.
+Note: you should change memcached-install-dir to whatever directory you want to install your memcached executable to.
 
-## Build status
+```
+./configure --prefix=/memcached-install-dir
+make && make install
+```
 
-See https://build.memcached.org/ for multi-platform regression testing status.
+If you installed the RDMA dependencies, not problem should arise.
 
-## Bug reports
+## Usage
 
-Feel free to use the issue tracker on github.
+The usage is the same as the original Memcached, the only addition is the flag --rdma which will start Memcached using RDMA instead of sockets over TCP or UDP.
+Depending from your setup you might have to specify the ip address of your RDMA capable NIC.
 
-**If you are reporting a security bug** please contact a maintainer privately.
-We follow responsible disclosure: we handle reports privately, prepare a
-patch, allow notifications to vendor lists. Then we push a fix release and your
-bug can be posted publicly with credit in our release notes and commit
-history.
+Example usage:
+memcached --rdma -l 10.149.0.55 -v
 
-## Website
+## Notes
 
-* https://www.memcached.org
-
-## Contributing
-
-See https://github.com/memcached/memcached/wiki/DevelopmentRepos
+This software was only tested on the [DAS-5](https://www.cs.vu.nl/das5/) system of the Vrije Universiteit Amsterdam.
+The directory das5 contains some utility scripts that will only work on the DAS-5.

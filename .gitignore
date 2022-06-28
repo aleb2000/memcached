@@ -45,3 +45,7 @@ doc/protocol-binary.txt
 .*.swp
 /compile_commands.json
 mcrdma_client/mcrdma_client
+mcrdma_reliability_test/mcrdma_reliability_test
+bench_results.csv
+.vscode/
+mcrdma_bench/mcrdma_bench

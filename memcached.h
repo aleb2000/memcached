@@ -227,7 +227,6 @@ enum bin_substates {
 enum protocol {
     ascii_prot = 3, /* arbitrary value. */
     binary_prot,
-    rdma_prot,
     negotiating_prot, /* Discovering the protocol */
 #ifdef PROXY
     proxy_prot,
@@ -937,13 +936,39 @@ extern int daemonize(int nochdir, int noclose);
 #include "hash.h"
 #include "util.h"
 
+const char *state_text(enum conn_states state);
+
+/* RDMA DECLARATIONS */
+void memcached_thread_init(int nthreads, void *arg);
+void mcrdma_libevent_thread_init(LIBEVENT_THREAD* thread);
+void reset_cmd_handler(conn *c);
+void complete_nread(conn *c);
+int read_into_chunked_item(conn *c);
+
+enum transmit_result {
+    TRANSMIT_COMPLETE,   /** All done writing. */
+    TRANSMIT_INCOMPLETE, /** More data remaining to write. */
+    TRANSMIT_SOFT_ERROR, /** Can't write any more right now. */
+    TRANSMIT_HARD_ERROR  /** Can't write (c->state is set to conn_closing) */
+};
+enum transmit_result transmit(conn *c);
+void conn_io_queue_complete(conn *c);
+
+enum try_read_result {
+    READ_DATA_RECEIVED,
+    READ_NO_DATA_RECEIVED,
+    READ_ERROR,            /** an error occurred (on the socket) (or client closed connection) */
+    READ_MEMORY_ERROR      /** failed to allocate more memory */
+};
+
+enum try_read_result try_read_network(conn *c);
+
 /*
  * Functions such as the libevent-related calls that need to do cross-thread
  * communication in multithreaded mode (rather than actually doing the work
  * in the current thread) are called via "dispatch_" frontends, which are
  * also #define-d to directly call the underlying code in singlethreaded mode.
  */
-void memcached_thread_init(int nthreads, void *arg);
 void redispatch_conn(conn *c);
 void timeout_conn(conn *c);
 #ifdef PROXY

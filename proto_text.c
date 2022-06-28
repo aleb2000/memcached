@@ -442,8 +442,13 @@ int try_read_command_ascii(conn *c) {
         return 0;
 
     el = memchr(c->rcurr, '\n', c->rbytes);
+
     if (!el) {
         if (c->rbytes > 2048) {
+            if(c->transport == rdma_transport) {
+                fprintf(stderr, "MCRDMA does not support large multigets\n");
+                //exit(EXIT_FAILURE);
+            }
             /*
              * We didn't have a '\n' in the first few k. This _has_ to be a
              * large multiget, if not we should just nuke the connection.

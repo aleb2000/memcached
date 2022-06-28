@@ -17,9 +17,20 @@ struct mcrdma_state {
     struct ibv_comp_channel *comp_channel;
     struct ibv_cq *client_cq;
 
-    char* buf;
-    size_t buf_size;
-    struct ibv_mr* buf_mr;
+
+    // Send Buffer
+    char* sbuf;
+    size_t sbuf_size;
+    struct ibv_mr* sbuf_mr;
+
+    // Recv Buffer
+    char* rbuf;
+    size_t rbuf_size;
+    struct ibv_mr* rbuf_mr;
+    bool rbuf_posted;
+
+    // Not important, used with the PING_PONG benchmark
+    bool pinged;
 };
 
 // Do not remove
@@ -34,7 +45,9 @@ int mcrdma_listen(void);
 
 void *mcrdma_worker(void*);
 
-conn* mcrdma_conn_new(enum conn_states init_state, enum network_transport transport);
+void mcrdma_state_machine(conn* c);
+
+conn* mcrdma_conn_new(enum conn_states init_state, const int read_buffer_size);
 
 void mcrdma_conn_destroy(conn* c);
 

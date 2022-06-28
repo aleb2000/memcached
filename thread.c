@@ -1090,3 +1090,59 @@ void memcached_thread_init(int nthreads, void *arg) {
     pthread_mutex_unlock(&init_lock);
 }
 
+/* MCRDMA thread stuff */
+
+/*
+ * In order to make the rdma subsystem compatible with other parts of memcached,
+ * an initialized LIBEVENT_THREAD must be present in the conn structure.
+ * This function initializes the part of a LIBEVENT_THREAD structure for that purpuse.
+ * This is a modified version of setup_thread()
+ */
+void mcrdma_libevent_thread_init(LIBEVENT_THREAD* thread) {
+    // Skipping notify event init
+    // Skipping storage init
+
+    // We don't need a libevent base
+
+    thread->ev_queue = malloc(sizeof(struct conn_queue));
+    if (thread->ev_queue == NULL) {
+        perror("Failed to allocate memory for connection queue");
+        exit(EXIT_FAILURE);
+    }
+    cq_init(thread->ev_queue);
+
+    if (pthread_mutex_init(&thread->stats.mutex, NULL) != 0) {
+        perror("Failed to initialize mutex");
+        exit(EXIT_FAILURE);
+    }
+
+    thread->rbuf_cache = cache_create("rbuf", READ_BUFFER_SIZE, sizeof(char *));
+    if (thread->rbuf_cache == NULL) {
+        fprintf(stderr, "Failed to create read buffer cache\n");
+        exit(EXIT_FAILURE);
+    }
+    // Note: we were cleanly passing in num_threads before, but this now
+    // relies on settings globals too much.
+    if (settings.read_buf_mem_limit) {
+        int limit = settings.read_buf_mem_limit / settings.num_threads;
+        if (limit < READ_BUFFER_SIZE) {
+            limit = 1;
+        } else {
+            limit = limit / READ_BUFFER_SIZE;
+        }
+        cache_set_limit(thread->rbuf_cache, limit);
+    }
+
+    thread->io_cache = cache_create("io", sizeof(io_pending_t), sizeof(char*));
+    if (thread->io_cache == NULL) {
+        fprintf(stderr, "Failed to create IO object cache\n");
+        exit(EXIT_FAILURE);
+    }
+    // We don't support the following modules
+    // Skipping TLS 
+    // Skipping EXTSTORE
+    // Skipping PROXY
+
+    // Not sure if the next line is necessary since we don't really use the io queue
+    thread_io_queue_add(thread, IO_QUEUE_NONE, NULL, NULL, NULL, NULL, NULL);
+}

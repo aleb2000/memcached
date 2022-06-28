@@ -1,5 +1,5 @@
-#ifndef MCRDMA_UTILS_H
-#define MCRDMA_UTILS_H
+#ifndef MCRDMA_CLIENT_UTILS_H
+#define MCRDMA_CLIENT_UTILS_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,9 +15,6 @@
 
 #include <rdma/rdma_cma.h>
 #include <infiniband/verbs.h>
-#include "mcrdma.h"
-
-
 
 #define DEBUG
 #undef DEBUG
@@ -52,8 +49,18 @@ int mcrdma_process_event(struct rdma_event_channel *echannel,
     	enum rdma_cm_event_type expected_event,
 		struct rdma_cm_event **cm_event);
 
-int poll_wce (struct mcrdma_state* s, struct ibv_wc *wc, int max_wc);
+/**
+ * Process max_wc work completion events on a given completion channel.
+ * Adapted from rdma example at https://github.com/animeshtrivedi/rdma-example/blob/master/src/rdma_common.c
+ * @param comp_channel The completion channel to get events from
+ * @param wc           The array where to store the events
+ * @param max_wc       Max number of work completion events to get
+ * @return             The actual number of work completion events processed on success,
+ *                      or a negative number on error
+ */
+//int process_work_completion_events (struct ibv_comp_channel *comp_channel,
+//       struct ibv_wc *wc, int max_wc);
+int poll_cq_for_wc (struct ibv_cq* cq, struct ibv_wc *wc, int max_wc);
 
 
-
-#endif // MCRDMA_UTILS_H
+#endif // MCRDMA_CLIENT_UTILS_H

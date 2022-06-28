@@ -73,17 +73,10 @@ static ssize_t tcp_read(conn *arg, void *buf, size_t count);
 static ssize_t tcp_sendmsg(conn *arg, struct msghdr *msg, int flags);
 static ssize_t tcp_write(conn *arg, void *buf, size_t count);
 
-enum try_read_result {
-    READ_DATA_RECEIVED,
-    READ_NO_DATA_RECEIVED,
-    READ_ERROR,            /** an error occurred (on the socket) (or client closed connection) */
-    READ_MEMORY_ERROR      /** failed to allocate more memory */
-};
-
 static int try_read_command_negotiate(conn *c);
 static int try_read_command_udp(conn *c);
 
-static enum try_read_result try_read_network(conn *c);
+//static enum try_read_result try_read_network(conn *c);
 static enum try_read_result try_read_udp(conn *c);
 
 static int start_conn_timeout_thread();
@@ -100,7 +93,7 @@ static void event_handler(const evutil_socket_t fd, const short which, void *arg
 static void conn_close(conn *c);
 static void conn_init(void);
 static bool update_event(conn *c, const int new_flags);
-static void complete_nread(conn *c);
+//static void complete_nread(conn *c);
 
 static void conn_free(conn *c);
 
@@ -124,13 +117,6 @@ static conn *listen_conn = NULL;
 static int max_fds;
 static struct event_base *main_base;
 
-enum transmit_result {
-    TRANSMIT_COMPLETE,   /** All done writing. */
-    TRANSMIT_INCOMPLETE, /** More data remaining to write. */
-    TRANSMIT_SOFT_ERROR, /** Can't write any more right now. */
-    TRANSMIT_HARD_ERROR  /** Can't write (c->state is set to conn_closing) */
-};
-
 /* Default methods to read from/ write to a socket */
 ssize_t tcp_read(conn *c, void *buf, size_t count) {
     assert (c != NULL);
@@ -147,7 +133,7 @@ ssize_t tcp_write(conn *c, void *buf, size_t count) {
     return write(c->sfd, buf, count);
 }
 
-static enum transmit_result transmit(conn *c);
+//static enum transmit_result transmit(conn *c);
 
 /* This reduces the latency without adding lots of extra wiring to be able to
  * notify the listener thread of when to listen again.
@@ -500,9 +486,6 @@ static const char *prot_text(enum protocol prot) {
         case binary_prot:
             rv = "binary";
             break;
-        case rdma_prot:
-            rv = "rdma";
-            break;
         case negotiating_prot:
             rv = "auto-negotiate";
             break;
@@ -630,7 +613,7 @@ io_queue_t *conn_io_queue_get(conn *c, int type) {
 // called after returning to the main worker thread.
 // users of the queue need to distinguish if the IO was actually consumed or
 // not and handle appropriately.
-static void conn_io_queue_complete(conn *c) {
+void conn_io_queue_complete(conn *c) {
     io_queue_t *q = c->io_queues;
     io_queue_cb_t *qcb = c->thread->io_queues;
     while (q->type != IO_QUEUE_NONE) {
@@ -805,9 +788,6 @@ conn *conn_new(const int sfd, enum conn_states init_state,
                 c->authenticated = false;
                 c->try_read_command = try_read_command_binary;
                 break;
-            case rdma_prot:
-                c->authenticated = true;
-                break;
             case negotiating_prot:
                 c->try_read_command = try_read_command_negotiate;
                 break;
@@ -974,7 +954,7 @@ void conn_close_all(void) {
 /**
  * Convert a state name to a human readable form.
  */
-static const char *state_text(enum conn_states state) {
+const char *state_text(enum conn_states state) {
     const char* const statenames[] = { "conn_listening",
                                        "conn_new_cmd",
                                        "conn_waiting",
@@ -1415,7 +1395,7 @@ void append_stats(const char *key, const uint16_t klen,
     assert(c->stats.offset <= c->stats.size);
 }
 
-static void reset_cmd_handler(conn *c) {
+void reset_cmd_handler(conn *c) {
     c->cmd = -1;
     c->substate = bin_no_state;
     if (c->item != NULL) {
@@ -1438,7 +1418,7 @@ static void reset_cmd_handler(conn *c) {
     }
 }
 
-static void complete_nread(conn *c) {
+void complete_nread(conn *c) {
     assert(c != NULL);
 #ifdef PROXY
     assert(c->protocol == ascii_prot
@@ -2420,7 +2400,7 @@ static enum try_read_result try_read_udp(conn *c) {
  *
  * @return enum try_read_result
  */
-static enum try_read_result try_read_network(conn *c) {
+enum try_read_result try_read_network(conn *c) {
     enum try_read_result gotdata = READ_NO_DATA_RECEIVED;
     int res;
     int num_allocs = 0;
@@ -2462,13 +2442,42 @@ static enum try_read_result try_read_network(conn *c) {
             pthread_mutex_lock(&c->thread->stats.mutex);
             c->thread->stats.bytes_read += res;
             pthread_mutex_unlock(&c->thread->stats.mutex);
-            gotdata = READ_DATA_RECEIVED;
-            c->rbytes += res;
-            if (res == avail && c->rbuf_malloced) {
-                // Resize rbuf and try a few times if huge ascii multiget.
-                continue;
+
+            if(IS_RDMA(c->transport) && c->rdma->pinged) {
+                c->rdma->pinged = false;
+                return READ_NO_DATA_RECEIVED;
+            }
+
+            // Check for PING PONG
+            if(memcmp(c->rbuf + c->rbytes, "PING\r\n", res) == 0) {
+                // It is a PING request, send back a PONG
+                //resp_start(c);
+                //out_string(c, "PONG");
+                //conn_set_state(c, conn_mwrite);
+                struct iovec iov[1];
+                iov[0].iov_base = "PONG\r\n";
+                iov[0].iov_len = 6;
+                struct msghdr msg;
+                msg.msg_name = NULL;
+                msg.msg_namelen = 0;
+                msg.msg_iov = iov;
+                msg.msg_iovlen = 1;
+                msg.msg_control = NULL;
+                msg.msg_controllen = 0;
+                msg.msg_flags = 0;
+                c->sendmsg(c, &msg, 0);
+                return READ_NO_DATA_RECEIVED;
+                // We use READ_MEMORY_ERROR as it will not cause the caller to change the state
+                // return READ_MEMORY_ERROR;
             } else {
-                break;
+                gotdata = READ_DATA_RECEIVED;
+                c->rbytes += res;
+                if (res == avail && c->rbuf_malloced) {
+                    // Resize rbuf and try a few times if huge ascii multiget.
+                    continue;
+                } else {
+                    break;
+                }
             }
         }
         if (res == 0) {
@@ -2672,7 +2681,7 @@ static void _transmit_post(conn *c, ssize_t res) {
  *   TRANSMIT_SOFT_ERROR Can't write any more right now.
  *   TRANSMIT_HARD_ERROR Can't write (c->state is set to conn_closing)
  */
-static enum transmit_result transmit(conn *c) {
+enum transmit_result transmit(conn *c) {
     assert(c != NULL);
     struct iovec iovs[IOV_MAX];
     struct msghdr msg;
@@ -2871,7 +2880,7 @@ static enum transmit_result transmit_udp(conn *c) {
 /* TODO: restrict number of times this can loop.
  * Also, benchmark using readv's.
  */
-static int read_into_chunked_item(conn *c) {
+int read_into_chunked_item(conn *c) {
     int total = 0;
     int res;
     assert(c->rcurr != c->ritem);
@@ -6003,11 +6012,11 @@ int main (int argc, char **argv) {
 #endif
 #ifdef EXTSTORE
     slabs_set_storage(storage);
-    if(!settings.use_rdma) // Disabled thread subsystem when using rdma
+    //if(!settings.use_rdma) // Disabled thread subsystem when using rdma TODO
         memcached_thread_init(settings.num_threads, storage);
     init_lru_crawler(storage);
 #else
-    if(!settings.use_rdma)
+    //if(!settings.use_rdma)
         memcached_thread_init(settings.num_threads, NULL);
     init_lru_crawler(NULL);
 #endif

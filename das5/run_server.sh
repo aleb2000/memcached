@@ -21,10 +21,16 @@ else
     node=$(echo $nodes | sed -r "s/^([0-9]+)+.*$/\1/")
 fi
 
+# Make sure to add the correct number of zeroes to the nodename
+if [ "${#node}" -eq 1 ];
+then
+    nodename="node00$node"
+else
+    nodename="node0$node"
+fi
 
-nodename="node0$node"
 echo "Using node $nodename"
 
 # Run memcached server on the node with the following arguments
-MEMCACHED_ARGS="--rdma -l 10.149.0.$node"
+MEMCACHED_ARGS="--rdma -l 10.149.0.$node -v"
 ssh -t $nodename "memcached $MEMCACHED_ARGS"
