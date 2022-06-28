@@ -166,6 +166,13 @@ static void work_ping_pong(struct client_result* res, int sockfd, int tid) {
         } else {
             res->min_ping_time = res->min_ping_time > curr_ping_time ? curr_ping_time : res->min_ping_time;
         }
+<<<<<<< HEAD
+=======
+
+        if(print_all) {
+            cprintf("ping time: %llu\n", curr_ping_time);
+        }
+>>>>>>> be1279740cc73bf58cff91e542b80f47e2e2e34a
     }
 
     free(recv_buf);

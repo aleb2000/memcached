@@ -132,6 +132,14 @@ static void work_set_get(struct client_result* res, struct mcrdma_client* client
         } else {
             res->min_get_time = res->min_get_time > curr_get_time ? curr_get_time : res->min_get_time;
         }
+<<<<<<< HEAD
+=======
+
+        if(print_all) {
+            cprintf("set time: %llu\n", curr_set_time);
+            cprintf("get time: %llu\n", curr_get_time);
+        }
+>>>>>>> be1279740cc73bf58cff91e542b80f47e2e2e34a
     }
 
     free(set_req);
