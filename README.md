@@ -26,7 +26,7 @@ Note: you should change memcached-install-dir to whatever directory you want to 
 make && make install
 ```
 
-If you installed the RDMA dependencies, not problem should arise.
+If you installed the RDMA dependencies, no problem should arise.
 
 ## Usage
 
@@ -34,7 +34,9 @@ The usage is the same as the original Memcached, the only addition is the flag -
 Depending from your setup you might have to specify the ip address of your RDMA capable NIC.
 
 Example usage:
+```
 memcached --rdma -l 10.149.0.55 -v
+```
 
 ## Notes
 
