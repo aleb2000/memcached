@@ -17,4 +17,6 @@ The mandatory arguments are:
 * PAYLOAD_SIZE: size of the messages to send, in bytes
 
 Example usage:
+```
 mcrdma_bench --rdma --set-get 10.149.0.53 11211 1 10000 256
+```
